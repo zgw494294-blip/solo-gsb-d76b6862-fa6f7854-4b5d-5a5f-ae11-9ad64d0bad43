@@ -1,0 +1,8 @@
+services:
+  led-mixer:
+    build: .
+    image: led-mixing-bench:latest
+    container_name: led-mixing-bench
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LED 混光配方台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <h1>LED 混光配方台</h1>
+    <p class="subtitle">OR-Tools CP-SAT 精确求解 · 最小总功率 · 同功率下驱动级按 ID 字典序最小 · 满档读数可由实测样本唯一标定 · 调光路径按各步功率之和最小联合规划 · 无近似配方</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="error-banner" class="banner error hidden"></div>
+  <div id="info-banner" class="banner info hidden"></div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>① 通道录入（3～6 路，ID 唯一）</h2>
+      <div class="panel-actions">
+        <button type="button" id="add-channel" class="btn small">＋ 添加通道</button>
+        <button type="button" id="reset-sample" class="btn small ghost">载入示例</button>
+      </div>
+    </div>
+    <p class="hint">满档线性 RGB：0～1000 整数且不全为 0；满档功率：1～10000 mW。</p>
+    <div class="table-scroll">
+      <table class="grid" id="channel-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>满档 R</th>
+            <th>满档 G</th>
+            <th>满档 B</th>
+            <th>功率 (mW)</th>
+            <th>满档色</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="channel-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>② 目标线性 RGB 与容差</h2>
+    <div class="target-row">
+      <div class="target-inputs">
+        <label>R <input type="number" id="target-r" min="0" max="1000" step="1" value="600"></label>
+        <label>G <input type="number" id="target-g" min="0" max="1000" step="1" value="420"></label>
+        <label>B <input type="number" id="target-b" min="0" max="1000" step="1" value="180"></label>
+        <label>共用容差 ±<input type="number" id="tolerance" min="0" max="20" step="1" value="12"></label>
+      </div>
+      <div class="swatch-block">
+        <div class="swatch" id="target-swatch"></div>
+        <div class="swatch-label">目标色<br><code id="target-hex"></code></div>
+      </div>
+    </div>
+    <div class="solve-row">
+      <button type="button" id="solve-btn" class="btn primary">求解最省功率配方</button>
+      <span class="solver-meta">整数规划精确求解；约束不可行时会明确提示“无可行配方”。</span>
+    </div>
+  </section>
+
+  <section class="panel" id="calib-panel">
+    <div class="panel-head">
+      <h2>③ LED 满档读数标定（3～12 组实测样本反求各路满档 RGB）</h2>
+      <div class="panel-actions">
+        <button type="button" id="add-sample" class="btn small">＋ 添加样本</button>
+        <button type="button" id="gen-samples" class="btn small ghost">按当前通道生成示例样本</button>
+      </div>
+    </div>
+    <p class="hint">
+      每组样本填写各路 <strong>0～255</strong> 整数驱动级，以及实测的 <strong>0～6000</strong>
+      整数线性 RGB。实测值按「各色实际值 = Σ(满档读数 × 驱动级) ÷ 255，再<strong>四舍五入到整数</strong>」解释，
+      后端用整数约束反求每路 0～1000 满档 RGB（三色不全为零）；样本矛盾、标定不唯一、搜索未完成都会明确报告，
+      <strong>只有证明唯一时才允许写回通道表（保留原功率）</strong>。
+    </p>
+    <div class="table-scroll">
+      <table class="grid calib-grid" id="sample-table">
+        <thead>
+          <tr id="sample-head-row"></tr>
+        </thead>
+        <tbody id="sample-tbody"></tbody>
+      </table>
+    </div>
+    <div class="solve-row">
+      <button type="button" id="calib-btn" class="btn primary">反求满档读数</button>
+      <span class="solver-meta">整数约束精确求解：先找一组合法参数，再证明是否存在第二组；搜索未完成不会给出结论。</span>
+    </div>
+
+    <div id="calib-result" hidden>
+      <div class="calib-status" id="calib-status"></div>
+      <div id="calib-unique-block" hidden>
+        <div class="table-scroll">
+          <table class="grid" id="calib-table">
+            <thead>
+              <tr><th>ID</th><th>反求满档 R</th><th>反求满档 G</th><th>反求满档 B</th>
+                  <th>满档色</th><th>当前功率 (mW，写回时保留)</th></tr>
+            </thead>
+            <tbody id="calib-tbody"></tbody>
+          </table>
+        </div>
+        <h3 class="subhead">逐样本实测校验（反求参数重算预测实测 vs 录入实测）</h3>
+        <div class="table-scroll">
+          <table class="grid" id="calib-residual-table">
+            <thead><tr><th>样本</th><th>反求参数预测实测</th><th>录入实测</th><th>残差</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="solve-row">
+          <button type="button" id="writeback-btn" class="btn primary">一键写回当前通道表（保留原功率）</button>
+          <span class="solver-meta" id="writeback-meta"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="result-panel" hidden>
+    <div class="panel-head">
+      <h2>④ 配方结果与对照</h2>
+      <div class="panel-actions">
+        <button type="button" id="restore-opt" class="btn small ghost" hidden>恢复最优驱动级</button>
+      </div>
+    </div>
+    <p class="hint" id="manual-hint" hidden>正在手动微调驱动级：下方色块、误差与功率为手动预览（不裁剪的精确值）。</p>
+
+    <div class="swatches">
+      <div class="swatch-block big">
+        <div class="swatch" id="target-swatch2"></div>
+        <div class="swatch-label">目标</div>
+      </div>
+      <div class="swatch-arrow">→</div>
+      <div class="swatch-block big">
+        <div class="swatch" id="actual-swatch"></div>
+        <div class="swatch-label">实际<br><code id="actual-hex"></code></div>
+      </div>
+    </div>
+
+    <div class="table-scroll">
+      <table class="grid" id="drive-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>驱动级 (0～255)</th>
+            <th>满档色</th>
+            <th>实际色</th>
+            <th>功率贡献 (mW)</th>
+          </tr>
+        </thead>
+        <tbody id="drive-tbody"></tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">分量对照（线性空间，不裁剪）</h3>
+    <div class="table-scroll">
+      <table class="grid" id="component-table">
+        <thead>
+          <tr><th>分量</th><th>下限</th><th>目标</th><th>上限</th><th>实际</th><th>误差(实际−目标)</th><th>判定</th></tr>
+        </thead>
+        <tbody>
+          <tr data-c="0"><td class="cname r">R</td><td class="lo"></td><td class="tgt"></td><td class="hi"></td><td class="act"></td><td class="err"></td><td class="judge"></td></tr>
+          <tr data-c="1"><td class="cname g">G</td><td class="lo"></td><td class="tgt"></td><td class="hi"></td><td class="act"></td><td class="err"></td><td class="judge"></td></tr>
+          <tr data-c="2"><td class="cname b">B</td><td class="lo"></td><td class="tgt"></td><td class="hi"></td><td class="act"></td><td class="err"></td><td class="judge"></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="power-line">
+      <span>总功率：<strong id="total-power">—</strong> mW</span>
+      <span class="power-frac" id="power-frac"></span>
+      <span id="power-opt-tag" class="tag ok">最优（最小功率）</span>
+    </div>
+    <p class="hint" id="tiebreak-hint"></p>
+  </section>
+
+  <section class="panel" id="path-panel">
+    <div class="panel-head">
+      <h2>⑤ 调光路径规划（起始驱动级 → 终点色的等时过渡）</h2>
+      <div class="panel-actions">
+        <button type="button" id="path-use-target" class="btn small ghost">终点 ← ② 的目标色</button>
+      </div>
+    </div>
+    <p class="hint">
+      以当前通道表为准，按 ID 录入各路 <strong>0～255</strong> 起始驱动级；终点线性 RGB
+      <strong>0～1000</strong>；<strong>2～5</strong> 个等时步骤；每步每路驱动变化上限
+      <strong>1～255</strong>；容差沿用 ② 的共用容差（当前 <strong id="path-tol-echo">±12</strong>）。
+      起点实际色按未裁剪公式计算，第 k 步参考色 = 起点实际色 → 终点按 k/步骤数线性插值（不取整）；
+      每步实际 RGB 须落在参考色 ± 容差且 0～1000 内，相邻两步（首步与起点）每路驱动变化不超过上限。
+      联合求解各步功率之和最小的完整路径；<strong>无完整路径或搜索未证明最优时不返回任何步骤</strong>。
+    </p>
+    <div class="table-scroll">
+      <table class="grid" id="path-start-table">
+        <thead>
+          <tr><th>ID</th><th>满档色</th><th>起始驱动级 (0～255)</th></tr>
+        </thead>
+        <tbody id="path-start-tbody"></tbody>
+      </table>
+    </div>
+    <div class="path-param-row">
+      <div class="target-inputs">
+        <label>终点 R <input type="number" id="path-target-r" min="0" max="1000" step="1" value="600"></label>
+        <label>G <input type="number" id="path-target-g" min="0" max="1000" step="1" value="420"></label>
+        <label>B <input type="number" id="path-target-b" min="0" max="1000" step="1" value="180"></label>
+        <label>步骤数 <input type="number" id="path-steps" min="2" max="5" step="1" value="3"></label>
+        <label>每步变化上限 <input type="number" id="path-delta" min="1" max="255" step="1" value="40"></label>
+      </div>
+      <div class="swatch-block">
+        <div class="swatch" id="path-start-swatch"></div>
+        <div class="swatch-label">起点实际色<br><code id="path-start-hex"></code></div>
+      </div>
+      <div class="swatch-block">
+        <div class="swatch" id="path-target-swatch"></div>
+        <div class="swatch-label">终点色<br><code id="path-target-hex"></code></div>
+      </div>
+    </div>
+    <div class="solve-row">
+      <button type="button" id="path-solve-btn" class="btn primary">规划最小功率调光路径</button>
+      <span class="solver-meta">联合整数规划：一次性求出全部步骤；只返回已证明各步功率之和最小的完整路径。</span>
+    </div>
+
+    <div id="path-result" hidden>
+      <div class="calib-status" id="path-status"></div>
+      <div id="path-detail" hidden>
+        <div class="path-timeline" id="path-timeline"></div>
+        <h3 class="subhead">各路驱动级随时间变化（Δ = 与前一列之差）</h3>
+        <div class="table-scroll">
+          <table class="grid" id="path-drive-table">
+            <thead><tr id="path-drive-head"></tr></thead>
+            <tbody id="path-drive-tbody"></tbody>
+          </table>
+        </div>
+        <h3 class="subhead">分量对照（每步实际 vs 参考 ± 容差，线性空间不裁剪）</h3>
+        <div class="table-scroll">
+          <table class="grid" id="path-comp-table">
+            <thead><tr id="path-comp-head"></tr></thead>
+            <tbody id="path-comp-tbody"></tbody>
+          </table>
+        </div>
+        <div class="power-line">
+          <span>各步功率之和：<strong id="path-total-power">—</strong> mW</span>
+          <span class="power-frac" id="path-power-frac"></span>
+          <span class="tag ok">最优（各步功率之和最小）</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap footer-note">
+  显示色块按标准 sRGB 传递函数（线性分量 ÷1000 归一化，γ≈2.4 分段编码）；
+  超出 0～1000 的值仅用于显示裁剪，不参与模型计算。
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
