@@ -211,6 +211,15 @@ input[type="number"]:focus, input[type="text"]:focus {
 .delta { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
 .delta.bad { color: var(--err); font-weight: 700; }
 
+/* 容错配方规划 */
+.fb-dead {
+  font-size: 11.5px; font-weight: 700; font-family: var(--mono);
+  background: rgba(239,77,77,.18); color: #ff9c9c;
+  border: 1px solid rgba(239,77,77,.45);
+  border-radius: 10px; padding: 1px 8px; margin-left: 2px;
+}
+#robust-drive-table .normal-row td { background: rgba(79,140,255,.08); }
+
 .footer-note {
   color: var(--muted); font-size: 12px; padding-top: 4px; padding-bottom: 30px;
 }

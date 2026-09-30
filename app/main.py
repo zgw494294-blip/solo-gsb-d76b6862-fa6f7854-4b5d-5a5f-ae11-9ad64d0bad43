@@ -16,11 +16,16 @@ from .schemas import (
     PathSolveRequest,
     PathSolveResponse,
     PathStepSolution,
+    RobustFallbackSolution,
+    RobustRecipeSolution,
+    RobustSolveRequest,
+    RobustSolveResponse,
     SolveRequest,
     SolveResponse,
 )
 from .calibration import CalibSample, calibrate
 from .path_solver import solve_path
+from .robust_solver import solve_robust
 from .solver import Channel, solve, SolverError
 
 # static/ 与 app/ 同级；用绝对路径，保证从任意工作目录启动都能找到页面
@@ -114,6 +119,65 @@ def api_calibrate(req: CalibrateRequest) -> CalibrateResponse:
             for (cid, r, g, b) in result.channels
         ],
         message=result.message,
+    )
+
+
+@app.post("/api/robust/solve", response_model=RobustSolveResponse)
+def api_solve_robust(req: RobustSolveRequest) -> RobustSolveResponse:
+    """规划可承受任意单路 LED 熄灭的配方（正常总功率最小）。
+
+    三态结论：optimal 返回正常配方与全部逐路故障备用配方；
+    infeasible / incomplete 不返回任何配方（不返回部分备用）。
+    """
+    channels = [
+        Channel(id=c.id, rgb=(c.r, c.g, c.b), power_mw=c.power_mw)
+        for c in req.channels
+    ]
+    target = (req.target_r, req.target_g, req.target_b)
+    res = solve_robust(
+        channels, target, req.tolerance, req.max_adjust_delta
+    )
+    if res.status != "optimal" or res.normal is None:
+        return RobustSolveResponse(
+            status=res.status,
+            channel_ids=[c.id for c in req.channels],
+            sorted_ids=res.sorted_ids,
+            target=list(target),
+            tolerance=req.tolerance,
+            max_adjust_delta=req.max_adjust_delta,
+            message=res.message,
+        )
+    normal = res.normal
+    return RobustSolveResponse(
+        status="optimal",
+        channel_ids=[c.id for c in req.channels],
+        sorted_ids=res.sorted_ids,
+        target=list(target),
+        tolerance=req.tolerance,
+        max_adjust_delta=req.max_adjust_delta,
+        normal=RobustRecipeSolution(
+            drives=normal.drives,
+            actual_rgb=normal.actual_rgb,
+            errors=normal.errors,
+            in_range=normal.in_range,
+            power_mw=normal.power_mw,
+            power_num=normal.power_num,
+        ),
+        fallbacks=[
+            RobustFallbackSolution(
+                failed_id=req.channels[f].id,
+                drives=res.fallbacks[f].drives,
+                actual_rgb=res.fallbacks[f].actual_rgb,
+                errors=res.fallbacks[f].errors,
+                in_range=res.fallbacks[f].in_range,
+                power_mw=res.fallbacks[f].power_mw,
+                power_num=res.fallbacks[f].power_num,
+            )
+            for f in range(len(req.channels))
+        ],
+        normal_power_mw=normal.power_mw,
+        normal_power_num=normal.power_num,
+        message=res.message,
     )
 
 

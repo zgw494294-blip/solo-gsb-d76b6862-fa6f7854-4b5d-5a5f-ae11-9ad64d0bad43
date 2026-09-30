@@ -153,6 +153,77 @@ class CalibrateResponse(BaseModel):
     message: str = ""
 
 
+# ---------------- 容错配方规划（任意单路熄灭） ----------------
+
+
+class RobustSolveRequest(BaseModel):
+    channels: list[ChannelInput] = Field(..., description="3～6 路 LED，ID 唯一")
+    target_r: int = Field(..., ge=0, le=1000, description="目标线性 R")
+    target_g: int = Field(..., ge=0, le=1000, description="目标线性 G")
+    target_b: int = Field(..., ge=0, le=1000, description="目标线性 B")
+    tolerance: int = Field(..., ge=0, le=20, description="共用整数容差")
+    max_adjust_delta: int = Field(
+        ..., ge=1, le=255, description="某路熄灭后，其余每路相对正常值允许的最大驱动级差 1～255"
+    )
+
+    @model_validator(mode="after")
+    def _check_channels(self) -> "RobustSolveRequest":
+        if not 3 <= len(self.channels) <= 6:
+            raise ValueError("LED 通道数必须为 3～6 路")
+        ids = [c.id for c in self.channels]
+        if len(set(ids)) != len(ids):
+            dup = sorted({x for x in ids if ids.count(x) > 1})
+            raise ValueError(f"通道 ID 必须唯一，重复 ID：{', '.join(dup)}")
+        return self
+
+
+class RobustRecipeSolution(BaseModel):
+    # 与 channel_ids 同序的驱动级
+    drives: list[int] = Field(..., description="各路驱动级，与 channel_ids 同序")
+    actual_rgb: list[float]
+    errors: list[float] = Field(..., description="实际 − 目标")
+    in_range: list[bool]
+    power_mw: float
+    power_num: int = Field(
+        ..., description="功率的整数分子，实际功率 = 该值 / 255"
+    )
+
+
+class RobustFallbackSolution(BaseModel):
+    # 熄灭的通道 ID（与 channels / channel_ids 中的一项对应）
+    failed_id: str
+    # 该路熄灭后的备用驱动级（故障路必为 0），与 channel_ids 同序
+    drives: list[int]
+    actual_rgb: list[float]
+    errors: list[float] = Field(..., description="实际 − 目标")
+    in_range: list[bool]
+    power_mw: float
+    power_num: int = Field(
+        ..., description="功率的整数分子，实际功率 = 该值 / 255"
+    )
+
+
+class RobustSolveResponse(BaseModel):
+    # optimal：正常配方 + 全部逐路备用配方（normal/fallbacks 有值）；
+    # infeasible：无完整容错方案；incomplete：搜索未证明最优（均不返回任何配方）
+    status: Literal["optimal", "infeasible", "incomplete"]
+    channel_ids: list[str] = []
+    sorted_ids: list[str] = Field(
+        default=[], description="字典序 tie-break 实际使用的 ID 顺序"
+    )
+    target: list[int] = []
+    tolerance: int = 0
+    max_adjust_delta: int = 0
+    normal: RobustRecipeSolution | None = None
+    # 与 channel_ids 同序，每项为对应通道熄灭后的备用配方
+    fallbacks: list[RobustFallbackSolution] = []
+    normal_power_mw: float | None = None
+    normal_power_num: int | None = Field(
+        default=None, description="正常配方总功率的整数分子，实际功率 = 该值 / 255"
+    )
+    message: str = ""
+
+
 # ---------------- 调光路径规划 ----------------
 
 

@@ -611,6 +611,7 @@ function onWriteback() {
   $('#result-panel').hidden = true;
   renderPathStartTable();
   clearPathResult();
+  clearRobustResult();
   showBanner('info',
     `<strong>✔ 已写回 ${applied} 路满档 RGB</strong>，各路满档功率保持原值。` +
     `可直接在 ② 设置目标色后点击“求解最省功率配方”。`);
@@ -857,6 +858,206 @@ function renderPathResult(data) {
     `精确值 ${data.total_power_num} / 255 mW（${K} 步合计）`;
 }
 
+/* ---------------- 容错配方规划（任意单路熄灭） ---------------- */
+
+// 最近一次容错规划结果（服务端原样返回）
+let robustResult = null;
+
+function refreshRobustSwatch() {
+  const tgt = [
+    intVal($('#robust-target-r')),
+    intVal($('#robust-target-g')),
+    intVal($('#robust-target-b')),
+  ];
+  const hex = linearToSrgbHex(tgt);
+  $('#robust-target-swatch').style.background = hex;
+  $('#robust-target-swatch').title = `目标线性 RGB(${tgt.join(', ')})`;
+  $('#robust-target-hex').textContent = hex.toUpperCase();
+  $('#robust-target-swatch2').style.background = hex;
+  $('#robust-tol-echo').textContent = `±${intVal($('#tolerance'))}`;
+}
+
+function readRobustForm() {
+  return {
+    target: {
+      r: intVal($('#robust-target-r')),
+      g: intVal($('#robust-target-g')),
+      b: intVal($('#robust-target-b')),
+    },
+    delta: intVal($('#robust-delta')),
+    tolerance: intVal($('#tolerance')),
+  };
+}
+
+function validateRobustForm(f) {
+  const errs = [];
+  if (!channels.every((c) => c.id)) errs.push('每路通道都必须填写 ID，才能规划容错配方。');
+  const ids = channels.map((c) => c.id);
+  if (new Set(ids).size !== ids.length) errs.push('通道 ID 必须唯一，才能规划容错配方。');
+  if (![3, 4, 5, 6].includes(channels.length))
+    errs.push(`当前通道数为 ${channels.length}，容错规划仅支持 3～6 路。`);
+  for (const k of ['r', 'g', 'b']) {
+    if (!Number.isInteger(f.target[k]) || f.target[k] < 0 || f.target[k] > 1000)
+      errs.push(`目标 ${k.toUpperCase()} 必须是 0～1000 的整数。`);
+  }
+  if (!Number.isInteger(f.delta) || f.delta < 1 || f.delta > 255)
+    errs.push('故障后允许调整的最大驱动级差必须是 1～255 的整数。');
+  if (f.tolerance < 0 || f.tolerance > 20)
+    errs.push('② 的共用容差必须是 0～20 的整数。');
+  return [...new Set(errs)];
+}
+
+function clearRobustResult() {
+  robustResult = null;
+  $('#robust-result').hidden = true;
+  $('#robust-detail').hidden = true;
+  const st = $('#robust-status');
+  st.className = 'calib-status';
+  st.textContent = '';
+}
+
+async function onSolveRobust() {
+  clearBanner();
+  readForm(); // 先同步通道表与 ② 的容差
+  const f = readRobustForm();
+  const errs = validateRobustForm(f);
+  if (errs.length) {
+    clearRobustResult();
+    showBanner('error', '<strong>容错参数有误，已拒绝提交：</strong><br>' +
+      errs.map(esc).join('<br>'));
+    return;
+  }
+  const btn = $('#robust-solve-btn');
+  btn.disabled = true;
+  btn.textContent = '规划中…';
+  try {
+    const resp = await fetch('/api/robust/solve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channels: channels.map(({ id, r, g, b, power_mw }) => ({ id, r, g, b, power_mw })),
+        target_r: f.target.r,
+        target_g: f.target.g,
+        target_b: f.target.b,
+        tolerance: f.tolerance,
+        max_adjust_delta: f.delta,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      clearRobustResult();
+      showBanner('error', '<strong>请求被拒绝：</strong><br>' +
+        errDetailHtml(data, '容错规划失败'));
+      return;
+    }
+    renderRobustResult(data);
+  } catch (e) {
+    clearRobustResult();
+    showBanner('error', `请求失败：${esc(e.message)}。请确认后端服务已启动。`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '规划容错配方（正常 + 逐路备用）';
+  }
+}
+
+function renderRobustResult(data) {
+  robustResult = data;
+  $('#robust-result').hidden = false;
+  const status = $('#robust-status');
+  const MAP = {
+    optimal: ['s-unique', '✔ 容错配方完整'],
+    infeasible: ['s-contradictory', '⛔ 无完整容错配方'],
+    incomplete: ['s-unknown', '⏳ 搜索未完成'],
+  };
+  const [cls, label] = MAP[data.status] || ['s-unknown', data.status];
+  status.className = `calib-status ${cls}`;
+  status.innerHTML = `<strong>${label}</strong> ${esc(data.message)}`;
+
+  if (data.status !== 'optimal') {
+    // 无完整方案 / 搜索未完成：不展示任何配方（含部分备用）
+    $('#robust-detail').hidden = true;
+    return;
+  }
+  $('#robust-detail').hidden = false;
+  const ids = data.channel_ids;
+  const normal = data.normal;
+  const tol = data.tolerance;
+  const limit = data.max_adjust_delta;
+  const names = ['R', 'G', 'B'];
+
+  // 正常实际色块
+  refreshRobustSwatch();
+  const hex = linearToSrgbHex(normal.actual_rgb);
+  $('#robust-normal-swatch').style.background = hex;
+  $('#robust-normal-hex').textContent = hex.toUpperCase();
+  const clipped = normal.actual_rgb.some((v) => v < 0 || v > 1000);
+  $('#robust-normal-swatch').title =
+    `正常实际线性 RGB(${normal.actual_rgb.map(fmt).join(', ')})` +
+    (clipped ? '（超出 0～1000，显示已裁剪，模型不裁剪）' : '');
+
+  // ---- 驱动级矩阵：行 = 正常 / 逐路熄灭备用，列 = 通道 ----
+  $('#robust-drive-head').innerHTML =
+    '<th>场景</th>' +
+    ids.map((id) => `<th>${esc(id)}</th>`).join('') +
+    '<th>实际色</th><th>功率 (mW)</th>';
+  const driveCell = (d, nd, isFailed) => {
+    if (isFailed) return '<td class="fb-dead-cell">0 <span class="fb-dead">熄灭</span></td>';
+    const dd = d - nd;
+    const bad = Math.abs(dd) > limit;
+    return `<td>${d} <span class="delta${bad ? ' bad' : ''}">` +
+      `(Δ${dd >= 0 ? '+' : ''}${dd})</span></td>`;
+  };
+  const rows = [];
+  rows.push(`<tr class="normal-row">
+    <td><strong>正常</strong></td>
+    ${normal.drives.map((d) => `<td>${d}</td>`).join('')}
+    <td>${swatchHtml(normal.actual_rgb, `正常实际 RGB(${normal.actual_rgb.map(fmt).join(', ')})`)}</td>
+    <td>${fmt(normal.power_mw)}</td>
+  </tr>`);
+  data.fallbacks.forEach((fb) => {
+    const fi = ids.indexOf(fb.failed_id);
+    rows.push(`<tr>
+      <td><strong>${esc(fb.failed_id)}</strong> 熄灭</td>
+      ${ids.map((_, i) => driveCell(fb.drives[i], normal.drives[i], i === fi)).join('')}
+      <td>${swatchHtml(fb.actual_rgb, `${fb.failed_id} 熄灭后实际 RGB(${fb.actual_rgb.map(fmt).join(', ')})`)}</td>
+      <td>${fmt(fb.power_mw)}</td>
+    </tr>`);
+  });
+  $('#robust-drive-tbody').innerHTML = rows.join('');
+
+  // ---- 分量 / 误差 / 判定表 ----
+  $('#robust-comp-head').innerHTML =
+    '<th>场景</th>' +
+    names.map((nm) => `<th>${nm} 实际</th><th>${nm} 误差</th><th>${nm} 判定</th>`).join('') +
+    '<th>区间（目标±容差）</th>';
+  const compRow = (title, rcp) => {
+    const cells = [];
+    for (let c = 0; c < 3; c++) {
+      const ok = rcp.in_range[c];
+      cells.push(
+        `<td>${fmt(rcp.actual_rgb[c])}</td>` +
+        `<td>${fmtSigned(rcp.errors[c])}</td>` +
+        `<td class="judge ${ok ? 'ok' : 'bad'}">${ok ? '✔' : '✘'}</td>`);
+    }
+    const lo = names.map((_, c) => Math.max(0, data.target[c] - tol)).join(', ');
+    const hi = names.map((_, c) => Math.min(1000, data.target[c] + tol)).join(', ');
+    return `<tr><td>${title}</td>${cells.join('')}<td class="solver-meta">[${lo}]～[${hi}]</td></tr>`;
+  };
+  const compRows = [compRow('<strong>正常</strong>', normal)];
+  data.fallbacks.forEach((fb) => {
+    compRows.push(compRow(`${esc(fb.failed_id)} 熄灭`, fb));
+  });
+  $('#robust-comp-tbody').innerHTML = compRows.join('');
+
+  // ---- 正常总功率与字典序说明 ----
+  $('#robust-power').textContent = fmt(data.normal_power_mw);
+  $('#robust-power-frac').textContent =
+    `精确值 ${data.normal_power_num} / 255 mW（仅统计正常配方；备用功率不参与优化）`;
+  $('#robust-tiebreak-hint').textContent =
+    `同功率字典序 tie-break（按 ID 字符串升序）：${data.sorted_ids.map(esc).join(' ＜ ')}` +
+    `；故障后每路调整上限 ±${limit}（故障路恒为 0）。`;
+}
+
 /* ---------------- 事件绑定 ---------------- */
 
 function bindEvents() {
@@ -873,6 +1074,7 @@ function bindEvents() {
     clearCalibResult();
     renderPathStartTable();
     clearPathResult();
+    clearRobustResult();
   });
 
   $('#reset-sample').addEventListener('click', () => {
@@ -889,12 +1091,18 @@ function bindEvents() {
     $('#path-target-b').value = SAMPLE.target.b;
     $('#path-steps').value = 3;
     $('#path-delta').value = 40;
+    $('#robust-target-r').value = 500;
+    $('#robust-target-g').value = 500;
+    $('#robust-target-b').value = 500;
+    $('#robust-delta').value = 60;
     renderChannels();
     renderCalibTable();
     clearCalibResult();
     renderPathStartTable();
     clearPathResult();
+    clearRobustResult();
     refreshTargetSwatch();
+    refreshRobustSwatch();
     clearBanner();
   });
 
@@ -903,6 +1111,7 @@ function bindEvents() {
     if (tr) syncRowState(tr);
     renderPathStartTable();
     clearPathResult();
+    clearRobustResult();
   });
   $('#channel-tbody').addEventListener('click', (e) => {
     if (!e.target.classList.contains('del-btn')) return;
@@ -914,14 +1123,17 @@ function bindEvents() {
     clearCalibResult();
     renderPathStartTable();
     clearPathResult();
+    clearRobustResult();
   });
 
   ['#target-r', '#target-g', '#target-b', '#tolerance'].forEach((sel) =>
     $(sel).addEventListener('input', refreshTargetSwatch));
-  // 容差被路径规划沿用：变更后清除旧路径结果
+  // 容差被路径规划与容错规划沿用：变更后清除旧结果
   $('#tolerance').addEventListener('input', () => {
     refreshPathSwatches();
     clearPathResult();
+    refreshRobustSwatch();
+    clearRobustResult();
   });
 
   $('#solve-btn').addEventListener('click', onSolve);
@@ -1008,6 +1220,22 @@ function bindEvents() {
     clearPathResult();
   });
   $('#path-solve-btn').addEventListener('click', onSolvePath);
+
+  // ---- 容错配方 ----
+  ['#robust-target-r', '#robust-target-g', '#robust-target-b',
+   '#robust-delta'].forEach((sel) =>
+    $(sel).addEventListener('input', () => {
+      refreshRobustSwatch();
+      clearRobustResult();
+    }));
+  $('#robust-use-target').addEventListener('click', () => {
+    $('#robust-target-r').value = intVal($('#target-r'));
+    $('#robust-target-g').value = intVal($('#target-g'));
+    $('#robust-target-b').value = intVal($('#target-b'));
+    refreshRobustSwatch();
+    clearRobustResult();
+  });
+  $('#robust-solve-btn').addEventListener('click', onSolveRobust);
 }
 
 /* ---------------- 启动 ---------------- */
@@ -1017,4 +1245,5 @@ renderChannels();
 renderCalibTable();
 renderPathStartTable();
 refreshTargetSwatch();
+refreshRobustSwatch();
 bindEvents();
