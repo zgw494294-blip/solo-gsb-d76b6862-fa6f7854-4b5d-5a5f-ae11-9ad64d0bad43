@@ -16,11 +16,15 @@ from .schemas import (
     PathSolveRequest,
     PathSolveResponse,
     PathStepSolution,
+    RobustSolveRequest,
+    RobustSolveResponse,
+    RobustVariantSolution,
     SolveRequest,
     SolveResponse,
 )
 from .calibration import CalibSample, calibrate
 from .path_solver import solve_path
+from .robust_solver import solve_robust
 from .solver import Channel, solve, SolverError
 
 # static/ 与 app/ 同级；用绝对路径，保证从任意工作目录启动都能找到页面
@@ -92,6 +96,65 @@ def api_solve(req: SolveRequest) -> SolveResponse:
         total_power_mw=sol.power_mw,
         power_num=sol.power_num,
         message="求解成功：总功率已最小，相同功率下驱动级序列按 ID 字典序最小。",
+    )
+
+
+@app.post("/api/robust/solve", response_model=RobustSolveResponse)
+def api_solve_robust(req: RobustSolveRequest) -> RobustSolveResponse:
+    """规划可承受任意单路 LED 熄灭的配方（正常总功率最小 + 逐路备用）。
+
+    三态结论：optimal 返回正常方案与全部备用配方；infeasible / incomplete
+    不返回正常方案，也不返回任何部分备用配方。
+    """
+    channels = [
+        Channel(id=c.id, rgb=(c.r, c.g, c.b), power_mw=c.power_mw)
+        for c in req.channels
+    ]
+    target = (req.target_r, req.target_g, req.target_b)
+    try:
+        res = solve_robust(channels, target, req.tolerance, req.max_adjust)
+    except SolverError as exc:  # 预留：求解器内部异常统一按 500
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if res.status != "optimal":
+        # 无完整容错方案 / 搜索未完成：不返回任何正常或备用驱动级
+        return RobustSolveResponse(
+            status=res.status,
+            channel_ids=[c.id for c in req.channels],
+            target=list(target),
+            tolerance=req.tolerance,
+            max_adjust=req.max_adjust,
+            message=res.message,
+        )
+
+    def variant(v) -> RobustVariantSolution:
+        return RobustVariantSolution(
+            failed_id=None,
+            drives=v.drives,
+            deltas=v.deltas,
+            actual_rgb=v.actual_rgb,
+            errors=v.errors,
+            in_range=v.in_range,
+            power_mw=v.power_mw,
+            power_num=v.power_num,
+        )
+
+    backups = []
+    for i, v in enumerate(res.backups):
+        bv = variant(v)
+        bv.failed_id = req.channels[i].id
+        backups.append(bv)
+
+    return RobustSolveResponse(
+        status="optimal",
+        channel_ids=[c.id for c in req.channels],
+        target=list(target),
+        tolerance=req.tolerance,
+        max_adjust=req.max_adjust,
+        sorted_ids=res.sorted_ids,
+        normal=variant(res.normal),
+        backups=backups,
+        message=res.message,
     )
 
 

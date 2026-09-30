@@ -187,6 +187,48 @@ input[type="number"]:focus, input[type="text"]:focus {
 #path-start-table { min-width: 420px; max-width: 560px; }
 #path-start-table td input { width: 92px; }
 
+/* 单路熄灭容错配方 */
+.robust-delta-label {
+  color: var(--muted); font-size: 13.5px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.robust-delta-label input { width: 72px; }
+#robust-normal-table { min-width: 560px; }
+.robust-backup-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: var(--panel-2);
+}
+.robust-backup-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.robust-backup-title { font-weight: 700; font-size: 14.5px; }
+.robust-backup-title .failed { color: #ff9c9c; }
+.robust-backup-meta { color: var(--muted); font-size: 12.5px; }
+.robust-backup-meta strong { color: #ffd76b; font-family: var(--mono); }
+.robust-backup-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .robust-backup-grid { grid-template-columns: 1fr; }
+}
+.robust-backup-drives {
+  width: 100%; min-width: 420px; font-size: 12.5px;
+}
+.robust-backup-drives th, .robust-backup-drives td { padding: 5px 7px; }
+.robust-comp { width: 100%; min-width: 360px; font-size: 12.5px; }
+.robust-comp th, .robust-comp td { padding: 5px 7px; }
+.drive-cell { font-family: var(--mono); }
+.drive-cell.zero { color: #ff9c9c; font-weight: 700; }
+.delta-ok { color: var(--ok); font-weight: 600; }
+
+
 .path-param-row {
   display: flex; gap: 26px; align-items: center;
   flex-wrap: wrap; margin-top: 14px;

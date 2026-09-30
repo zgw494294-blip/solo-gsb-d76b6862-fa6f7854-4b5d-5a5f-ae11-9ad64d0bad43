@@ -73,6 +73,51 @@ class SolveResponse(BaseModel):
     message: str = ""
 
 
+# ---------------- 故障容错配方（正常 + 逐路熄灭备用） ----------------
+
+
+class RobustSolveRequest(SolveRequest):
+    max_adjust: int = Field(
+        ..., ge=1, le=255,
+        description="某路熄灭后，其余各路备用驱动级相对正常值允许的最大级差 1～255",
+    )
+
+
+class RobustVariantSolution(BaseModel):
+    """一个场景（正常或某路熄灭）的配方。"""
+
+    # 备用场景：被熄灭的通道 ID；正常场景为 None
+    failed_id: str | None = None
+    drives: list[int] = Field(..., description="各路驱动级，与 channel_ids 同序")
+    # 备用场景相对正常方案的驱动级之差；正常场景全为 0
+    deltas: list[int] = []
+    actual_rgb: list[float]
+    errors: list[float] = Field(..., description="实际 − 目标")
+    in_range: list[bool]
+    power_mw: float
+    power_num: int = Field(
+        ..., description="该场景功率的整数分子，实际功率 = 该值 / 255"
+    )
+
+
+class RobustSolveResponse(BaseModel):
+    # optimal：正常方案 + 全部 n 路备用配方均返回；
+    # infeasible：无完整容错方案；incomplete：搜索未证明最优（均不返回任何配方）
+    status: Literal["optimal", "infeasible", "incomplete"]
+    channel_ids: list[str] = Field(
+        default=[], description="通道 ID 顺序（与各 drives/输入 channels 同序）"
+    )
+    target: list[int] = []
+    tolerance: int = 0
+    max_adjust: int = 0
+    # 字典序 tie-break 实际使用的 ID 顺序
+    sorted_ids: list[str] = []
+    normal: RobustVariantSolution | None = None
+    # 逐路熄灭的备用配方，顺序与 channel_ids 一一对应
+    backups: list[RobustVariantSolution] = []
+    message: str = ""
+
+
 # ---------------- 满档读数标定 ----------------
 
 

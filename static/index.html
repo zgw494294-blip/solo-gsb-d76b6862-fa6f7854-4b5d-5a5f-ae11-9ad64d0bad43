@@ -10,7 +10,7 @@
 <header class="topbar">
   <div class="wrap">
     <h1>LED 混光配方台</h1>
-    <p class="subtitle">OR-Tools CP-SAT 精确求解 · 最小总功率 · 同功率下驱动级按 ID 字典序最小 · 满档读数可由实测样本唯一标定 · 调光路径按各步功率之和最小联合规划 · 无近似配方</p>
+    <p class="subtitle">OR-Tools CP-SAT 精确求解 · 最小总功率 · 同功率下驱动级按 ID 字典序最小 · 单路熄灭容错配方 · 满档读数可由实测样本唯一标定 · 调光路径按各步功率之和最小联合规划 · 无近似配方</p>
   </div>
 </header>
 
@@ -65,9 +65,62 @@
     </div>
   </section>
 
+  <section class="panel" id="robust-panel">
+    <h2>③ 单路熄灭容错配方（正常配方 + 每一路熄灭后的备用配方）</h2>
+    <p class="hint">
+      沿用当前 3～6 路通道、② 的目标线性 RGB 与共用容差；另输入<strong>某路熄灭后其余各路允许调整的最大驱动级差</strong>
+      <strong>1～255</strong>（故障路驱动级强制为 0）。联合求解：正常配方与<strong>每一路</strong>单独熄灭后的备用配方都须按未裁剪公式
+      落在目标 ± 容差且 0～1000 内；备用各路与正常值之差不得超过上限。在<strong>具备全部备用配方</strong>的正常方案中最小化
+      <strong>正常总功率</strong>，同功率时正常驱动序列按 ID 升序取字典序最小，备用配方只需可行。
+      <strong>无完整方案时不返回任何正常/部分备用配方；搜索未证明最优时报告“搜索未完成”。</strong>
+    </p>
+    <div class="solve-row">
+      <label class="robust-delta-label">故障后每路最大调整级差
+        <input type="number" id="robust-delta" min="1" max="255" step="1" value="80">
+      </label>
+      <button type="button" id="robust-solve-btn" class="btn primary">规划容错配方</button>
+      <span class="solver-meta">整数规划一次联合求解 n+1 个场景；只返回已证明正常总功率最小且备用齐全的完整方案。</span>
+    </div>
+
+    <div id="robust-result" hidden>
+      <div class="calib-status" id="robust-status"></div>
+      <div id="robust-detail" hidden>
+        <h3 class="subhead">正常配方（总功率已在全部容错方案中最小）</h3>
+        <div class="swatches">
+          <div class="swatch-block big">
+            <div class="swatch" id="robust-target-swatch"></div>
+            <div class="swatch-label">目标</div>
+          </div>
+          <div class="swatch-arrow">→</div>
+          <div class="swatch-block big">
+            <div class="swatch" id="robust-normal-swatch"></div>
+            <div class="swatch-label">正常实际<br><code id="robust-normal-hex"></code></div>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table class="grid" id="robust-normal-table">
+            <thead>
+              <tr><th>ID</th><th>正常驱动级</th><th>满档色</th><th>正常贡献色</th><th>功率贡献 (mW)</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="power-line">
+          <span>正常总功率：<strong id="robust-normal-power">—</strong> mW</span>
+          <span class="power-frac" id="robust-normal-power-frac"></span>
+          <span class="tag ok">最优（最小正常功率 + 字典序）</span>
+        </div>
+        <p class="hint" id="robust-tiebreak-hint"></p>
+
+        <h3 class="subhead">逐路熄灭备用配方（故障路为 0，其余各路与正常值之差不超过上限）</h3>
+        <div id="robust-backups"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="panel" id="calib-panel">
     <div class="panel-head">
-      <h2>③ LED 满档读数标定（3～12 组实测样本反求各路满档 RGB）</h2>
+      <h2>④ LED 满档读数标定（3～12 组实测样本反求各路满档 RGB）</h2>
       <div class="panel-actions">
         <button type="button" id="add-sample" class="btn small">＋ 添加样本</button>
         <button type="button" id="gen-samples" class="btn small ghost">按当前通道生成示例样本</button>
@@ -121,7 +174,7 @@
 
   <section class="panel" id="result-panel" hidden>
     <div class="panel-head">
-      <h2>④ 配方结果与对照</h2>
+      <h2>⑤ 配方结果与对照</h2>
       <div class="panel-actions">
         <button type="button" id="restore-opt" class="btn small ghost" hidden>恢复最优驱动级</button>
       </div>
@@ -178,7 +231,7 @@
 
   <section class="panel" id="path-panel">
     <div class="panel-head">
-      <h2>⑤ 调光路径规划（起始驱动级 → 终点色的等时过渡）</h2>
+      <h2>⑥ 调光路径规划（起始驱动级 → 终点色的等时过渡）</h2>
       <div class="panel-actions">
         <button type="button" id="path-use-target" class="btn small ghost">终点 ← ② 的目标色</button>
       </div>
